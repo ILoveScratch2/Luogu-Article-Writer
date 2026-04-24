@@ -1,0 +1,422 @@
+你是否有过以下烦恼？
+
+- 出模拟赛需要导出 PDF，但是不想下载 Typora 等 Markdown 编辑器？
+- Markdown 编辑器的 Markdown、$\KaTeX$ 与洛谷不同（如洛谷的 tuack-style 表格等），需要自行调整，或无法达到预期效果？
+
+我（和 Gemini 3.1 Pro）开发了一个插件，可以一键把洛谷专栏导出为 PDF，无需任何多余配置！
+
+添加的特殊 Markdown 语法：
+
+- `===pagebreak===`：分页符，在专栏中新开一行输入此分页符，以在打印 PDF 中分页（即新开一页打印后面的内容）。
+
+使用教程：
+
+- 安装脚本管理器，如 Tampermonkey（篡改猴），ViolentMonkey（暴力猴），ScriptCat（脚本猫）等，并启用开发者模式（如果需要）。
+- 从 <https://greasyfork.org/scripts/568327> 获取脚本。如果你无法访问此链接，请通过 <https://file.murasame.site/shared/userscript/luogu-article2pdf.user.js> 获取，或查看此文章底部的脚本源码。
+- 打开或创建一个专栏（如[演示专栏](https://www.luogu.com.cn/article/fgxrfw0y)，注意暂不支持从 luogu.me 打印成 PDF），点击「打印为 PDF」按钮以打印。
+- 建议先在「（设置）」中配置字体信息，留空以使用默认字体。建议把等宽字体修改为你在洛谷的「个人中心 - 偏好设置」中选择的代码字体，以防止代码块行号不对齐等问题。
+- 打印为 PDF 会调用浏览器自带的打印功能，如果你打印出的 PDF 有页面标题、打印时间等信息，请**在浏览器的打印页面**取消勾选「页眉和页脚」（可能需要点「更多设置」展开）。建议使用「另存为 PDF」作为「目标打印机」。
+
+插件源码：
+
+:::info[Source Code]
+
+大部分由 Gemini 3.1 Pro 实现。
+
+```javascript
+// ==UserScript==
+// @name         Luogu Article2PDF
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  将洛谷专栏快速打印为 PDF。
+// @author       Murasame & Gemini
+// @match        *://www.luogu.com.cn/article/*
+// @match        *://www.luogu.com/article/*
+// @require      https://fastly.jsdelivr.net/npm/sweetalert2@11
+// @license      MIT
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    if (typeof window.Swal === 'undefined') {
+        const swalScript = document.createElement('script');
+        swalScript.src = 'https://fastly.jsdelivr.net/npm/sweetalert2@11';
+        document.head.appendChild(swalScript);
+    }
+
+    const DEFAULT_CONFIG = {
+        mainFont: 'Lato, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif',
+        codeFont: '"Fira Code", Consolas, Monaco, monospace',
+        showCodeBlockBorder: true,
+        showLineNumbers: true
+    };
+
+    function getConfig() {
+        try {
+            const saved = localStorage.getItem('gemini_pdf_config');
+            return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
+        } catch (e) {
+            return DEFAULT_CONFIG;
+        }
+    }
+
+    function saveConfig(cfg) {
+        localStorage.setItem('gemini_pdf_config', JSON.stringify(cfg));
+    }
+
+    function createSettingsModal() {
+        if (document.getElementById('gemini-pdf-modal')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'gemini-pdf-modal';
+        overlay.style.position = 'fixed';
+        overlay.style.top = '0';
+        overlay.style.left = '0';
+        overlay.style.width = '100vw';
+        overlay.style.height = '100vh';
+        overlay.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        overlay.style.zIndex = '999999';
+        overlay.style.display = 'none';
+        overlay.style.justifyContent = 'center';
+        overlay.style.alignItems = 'center';
+
+        const modal = document.createElement('div');
+        modal.style.backgroundColor = '#fff';
+        modal.style.padding = '24px 32px';
+        modal.style.borderRadius = '8px';
+        modal.style.width = '400px';
+        modal.style.boxShadow = '0 10px 25px rgba(0,0,0,0.2)';
+        modal.style.fontFamily = 'sans-serif';
+
+        modal.innerHTML = `
+            <h3 style="margin-top:0; margin-bottom: 20px; font-size: 18px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px;">PDF 打印高级设置</h3>
+            <div style="margin-bottom: 15px;">
+                <label style="display:block; font-size: 14px; margin-bottom: 5px; color: #555;">正文字体（留空使用默认）：</label>
+                <input id="cfg-mainFont" type="text" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display:block; font-size: 14px; margin-bottom: 5px; color: #555;">代码块字体：</label>
+                <input id="cfg-codeFont" type="text" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
+            </div>
+            <div style="margin-bottom: 15px; display: flex; align-items: center;">
+                <input id="cfg-border" type="checkbox" style="margin-right: 8px; width: 16px; height: 16px;" />
+                <label for="cfg-border" style="font-size: 14px; color: #333; cursor: pointer;">为代码块添加边框</label>
+            </div>
+            <div style="margin-bottom: 25px; display: flex; align-items: center;">
+                <input id="cfg-linenum" type="checkbox" style="margin-right: 8px; width: 16px; height: 16px;" />
+                <label for="cfg-linenum" style="font-size: 14px; color: #333; cursor: pointer;">显示代码块行号</label>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button id="cfg-cancel" style="padding: 8px 16px; border: none; background: #e0e0e0; color: #333; border-radius: 4px; cursor: pointer;">取消</button>
+                <button id="cfg-save" style="padding: 8px 16px; border: none; background: #3498db; color: #fff; border-radius: 4px; cursor: pointer;">保存</button>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        document.getElementById('cfg-cancel').onclick = () => overlay.style.display = 'none';
+        document.getElementById('cfg-save').onclick = () => {
+            const newCfg = {
+                mainFont: document.getElementById('cfg-mainFont').value,
+                codeFont: document.getElementById('cfg-codeFont').value,
+                showCodeBlockBorder: document.getElementById('cfg-border').checked,
+                showLineNumbers: document.getElementById('cfg-linenum').checked
+            };
+            saveConfig(newCfg);
+            overlay.style.display = 'none';
+            if (window.Swal) {
+                Swal.fire({
+                    icon: 'success',
+                    title: '保存成功',
+                    text: '设置已保存！下次点击“打印为 PDF”时生效。',
+                    confirmButtonColor: '#3498db',
+                    timer: 2000
+                });
+            }
+        };
+    }
+
+    function openSettingsModal() {
+        createSettingsModal();
+        const cfg = getConfig();
+        document.getElementById('cfg-mainFont').value = cfg.mainFont;
+        document.getElementById('cfg-codeFont').value = cfg.codeFont;
+        document.getElementById('cfg-border').checked = cfg.showCodeBlockBorder;
+        document.getElementById('cfg-linenum').checked = cfg.showLineNumbers;
+        document.getElementById('gemini-pdf-modal').style.display = 'flex';
+    }
+
+    function injectPrintButton() {
+        if (document.getElementById('gemini-print-wrapper')) return;
+
+        const metaDiv = document.querySelector('.metas');
+        const content = document.querySelector('.lfe-marked');
+
+        if (!metaDiv || !content) return;
+
+        const printWrapper = document.createElement('div');
+        printWrapper.id = 'gemini-print-wrapper';
+        printWrapper.style.marginLeft = '1em';
+
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'label';
+        labelDiv.innerText = '操作';
+        labelDiv.setAttribute('data-v-71eca628', '');
+
+        const actionDiv = document.createElement('div');
+        actionDiv.style.display = 'flex';
+
+        const printBtn = document.createElement('span');
+        printBtn.innerText = '打印为 PDF';
+        printBtn.style.cursor = 'pointer';
+        printBtn.style.color = '#3498db';
+        printBtn.style.transition = 'color 0.2s';
+        printBtn.onmouseover = () => printBtn.style.color = '#2980b9';
+        printBtn.onmouseout = () => printBtn.style.color = '#3498db';
+
+        const settingsBtn = document.createElement('span');
+        settingsBtn.innerText = '（设置）';
+        settingsBtn.style.cursor = 'pointer';
+        settingsBtn.style.color = '#7f8c8d';
+        settingsBtn.style.transition = 'color 0.2s';
+        settingsBtn.onmouseover = () => settingsBtn.style.color = '#34495e';
+        settingsBtn.onmouseout = () => settingsBtn.style.color = '#7f8c8d';
+
+        actionDiv.appendChild(printBtn);
+        actionDiv.appendChild(settingsBtn);
+        printWrapper.appendChild(labelDiv);
+        printWrapper.appendChild(actionDiv);
+        metaDiv.appendChild(printWrapper);
+
+        settingsBtn.addEventListener('click', openSettingsModal);
+
+        printBtn.addEventListener('click', () => {
+            if (!content) {
+                if (window.Swal) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: '未检测到内容',
+                        text: '未找到 .lfe-marked 元素，请确保页面已完全加载！',
+                        confirmButtonColor: '#3498db'
+                    });
+                }
+                return;
+            }
+
+            const CONFIG = getConfig();
+            const hiddenElements = [];
+            const detailsStates = [];
+            const pageBreakStates = [];
+            const modifiedTables = [];
+            const preStates = [];
+
+            content.querySelectorAll('details').forEach(details => {
+                detailsStates.push({ el: details, isOpen: details.hasAttribute('open') });
+                details.setAttribute('open', '');
+            });
+
+            let firstPageBreak = null;
+            content.querySelectorAll('p').forEach(p => {
+                if (p.textContent.trim() === '===pagebreak===') {
+                    if (!firstPageBreak) firstPageBreak = p;
+                    pageBreakStates.push({ el: p, cssText: p.style.cssText });
+                    p.style.pageBreakAfter = 'always';
+                    p.style.breakAfter = 'always';
+                    p.style.color = 'transparent';
+                    p.style.height = '0';
+                    p.style.margin = '0';
+                    p.style.overflow = 'hidden';
+                }
+            });
+
+            content.querySelectorAll('table').forEach(table => {
+                let isBeforeFirstPageBreak = true;
+                if (firstPageBreak) {
+                    const position = table.compareDocumentPosition(firstPageBreak);
+                    isBeforeFirstPageBreak = !!(position & Node.DOCUMENT_POSITION_FOLLOWING);
+                }
+                if (isBeforeFirstPageBreak) {
+                    modifiedTables.push(table);
+                    table.classList.add('gemini-print-table-full');
+                    if (table.parentElement && table.parentElement.tagName === 'DIV') {
+                        table.parentElement.classList.add('gemini-print-wrapper-full');
+                    }
+                }
+            });
+
+            content.querySelectorAll('pre').forEach(pre => {
+                const code = pre.querySelector('code');
+                if (!code) return;
+
+                preStates.push({
+                    el: pre,
+                    cssText: pre.style.cssText,
+                    originalHTML: code.innerHTML,
+                    classList: Array.from(pre.classList)
+                });
+
+                if (CONFIG.showCodeBlockBorder) {
+                    pre.classList.add('gemini-print-pre-border');
+                }
+
+                if (CONFIG.showLineNumbers) {
+                    const codeStyle = window.getComputedStyle(code);
+                    const fontFamily = CONFIG.codeFont || codeStyle.fontFamily;
+                    let htmlContent = code.innerHTML.replace(/\n$/, '');
+                    let lines = htmlContent.split('\n');
+                    while (lines.length > 0) {
+                        let lastLineText = lines[lines.length - 1].replace(/<[^>]*>/g, '').trim();
+                        if (lastLineText === '') {
+                            lines.pop();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let newHTML = lines.map((line, index) => {
+                        let num = index + 1;
+                        let fontSizeStyle = codeStyle.fontSize;
+                        return `<div class="gemini-code-line"><span class="gemini-line-num" style="font-size: ${fontSizeStyle}; font-family: ${fontFamily};">${num}</span><span class="gemini-line-content">${line}</span></div>`;
+                    }).join('');
+
+                    code.innerHTML = newHTML;
+                }
+            });
+
+            let curr = content;
+            while (curr && curr !== document.body) {
+                const siblings = curr.parentNode ? curr.parentNode.children : [];
+                for (let i = 0; i < siblings.length; i++) {
+                    const sibling = siblings[i];
+                    if (sibling !== curr && sibling.tagName !== 'SCRIPT' && sibling.tagName !== 'STYLE' && sibling.id !== 'gemini-pdf-modal') {
+                        hiddenElements.push({ el: sibling, display: sibling.style.display });
+                        sibling.style.display = 'none';
+                    }
+                }
+                hiddenElements.push({
+                    el: curr, margin: curr.style.margin, padding: curr.style.padding,
+                    width: curr.style.width, maxWidth: curr.style.maxWidth, isAncestor: true
+                });
+                curr.style.margin = '0';
+                curr.style.padding = '0';
+                curr.style.width = '100%';
+                curr.style.maxWidth = '100%';
+
+                curr = curr.parentNode;
+            }
+
+            const printStyle = document.createElement('style');
+            printStyle.innerHTML = `
+                @media print {
+                    * {
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
+                    @page { margin: 1.5cm; }
+                    body { background: white !important; }
+                    pre, blockquote, tr, img { page-break-inside: avoid; }
+                    .lfe-marked { width: 100% !important; max-width: none !important; }
+                    details[open] { display: block !important; }
+
+                    .gemini-print-wrapper-full { overflow: visible !important; display: block !important; width: 99% !important; }
+                    .gemini-print-table-full { width: 99% !important; max-width: 99% !important; display: table !important; table-layout: auto !important; }
+
+                    ${CONFIG.mainFont ? `.lfe-marked { font-family: ${CONFIG.mainFont} !important; }` : ''}
+                    ${CONFIG.codeFont ? `.lfe-marked pre, .lfe-marked code { font-family: ${CONFIG.codeFont} !important; }` : ''}
+
+                    .gemini-print-pre-border {
+                        border: 1px solid #d1d5db !important;
+                        border-radius: 6px !important;
+                        box-shadow: none !important;
+                    }
+                    .lfe-marked pre {
+                        padding: 0 !important;
+                        background: #ffffff !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
+                    .gemini-line-num {
+                        flex-shrink: 0 !important;
+                        width: 3.5em !important;
+                        text-align: right !important;
+                        padding-right: 0.8em !important;
+                        box-sizing: border-box !important;
+                        color: #9ca3af !important;
+                        user-select: none !important;
+                        background-color: #f8f9fa !important;
+                        border-right: 1px solid #d1d5db !important;
+                    }
+                    .gemini-code-line:first-child .gemini-line-num,
+                    .gemini-code-line:first-child .gemini-line-content {
+                        padding-top: 1em !important;
+                    }
+                    .gemini-code-line:last-child .gemini-line-num,
+                    .gemini-code-line:last-child .gemini-line-content {
+                        padding-bottom: 1em !important;
+                    }
+                    .gemini-code-line {
+                        display: flex !important;
+                        align-items: stretch !important;
+                        width: 100% !important;
+                        page-break-inside: avoid !important;
+                    }
+                    .gemini-line-content {
+                        flex-grow: 1 !important;
+                        padding-left: 0.8em !important;
+                        white-space: pre-wrap !important;
+                        word-wrap: break-word !important;
+                        overflow-wrap: anywhere !important;
+                        min-height: 1.5em;
+                    }
+                }
+            `;
+            document.head.appendChild(printStyle);
+
+            setTimeout(() => {
+                window.print();
+
+                hiddenElements.forEach(item => {
+                    if (item.isAncestor) {
+                        item.el.style.margin = item.margin; item.el.style.padding = item.padding;
+                        item.el.style.width = item.width; item.el.style.maxWidth = item.maxWidth;
+                    } else {
+                        item.el.style.display = item.display;
+                    }
+                });
+                detailsStates.forEach(item => {
+                    if (item.isOpen) item.el.setAttribute('open', '');
+                    else item.el.removeAttribute('open');
+                });
+                pageBreakStates.forEach(item => {
+                    item.el.style.cssText = item.cssText;
+                });
+                modifiedTables.forEach(table => {
+                    table.classList.remove('gemini-print-table-full');
+                    if (table.parentElement) {
+                        table.parentElement.classList.remove('gemini-print-wrapper-full');
+                    }
+                });
+                preStates.forEach(item => {
+                    item.el.style.cssText = item.cssText;
+                    item.el.className = item.classList.join(' ');
+                    if (item.originalHTML !== undefined) {
+                        const code = item.el.querySelector('code');
+                        if (code) code.innerHTML = item.originalHTML;
+                    }
+                });
+
+                document.head.removeChild(printStyle);
+            }, 500);
+        });
+    }
+
+    const observer = new MutationObserver(() => injectPrintButton());
+    observer.observe(document.body, { childList: true, subtree: true });
+    setTimeout(injectPrintButton, 1000);
+})();
+```
+:::
+
+演示专栏生成的 PDF：<https://file.murasame.site/shared/misc/pdf/article2pdf-demonstration.pdf>。
