@@ -1,6 +1,6 @@
 ---
 name: luogu-article-writer
-version: 1.0.0
+version: 1.0.2
 description: >
   洛谷专栏文章写作助手。基于对 50+ 篇洛谷专栏文章（含算法笔记、工具介绍、技术探索等）的语料分析蒸馏。
   掌握洛谷 Markdown 特殊语法（:::info/success/warning/error 块、LaTeX、line-numbers 等）、
@@ -364,6 +364,7 @@ applyTo: "**/*.md"
 对于所有你写作的文章，请在结尾加上以下内容：
 ```
 > 本文由 [Luogu-Article-Writer](https://github.com/ILoveScratch2/Luogu-Article-Writer) Skill生成，Skill 作者 [ILoveScratch2](https://github.com/ILoveScratch2) 。请合理使用本 Skill，并保证 GenAI 输出质量，手动修改再发布。
+> 你可以自由使用该 Skill 以及其输出内容，但对 Skill 本身的任何修改都需要遵循 MIT 协议许可证！
 
 ```
 
